@@ -1,0 +1,123 @@
+# 데이터 불러오기
+data <- read.csv("medical_data.csv")
+
+# 데이터 구조 확인
+str(data)
+summary(data)
+
+데이터 전처리
+
+# 결측값 확인
+sum(is.na(data))
+
+# 결측값을 제거하는 방법 (NA가 있는 행 삭제)
+data_clean <- data %>% drop_na()
+
+# 범주형 변수 처리 (예: 성별을 factor로 변환)
+data_clean$gender <- as.factor(data_clean$gender)
+data_clean$stomach_cancer <- as.factor(data_clean$stomach_cancer)  # 종속변수도 factor형으로 변환
+
+EDA
+# 위암 발생 여부 분포 확인
+table(data_clean$stomach_cancer)
+
+# 시각화
+ggplot(data_clean, aes(x=stomach_cancer, fill=stomach_cancer)) +
+  geom_bar() +
+  labs(title="Distribution of Stomach Cancer", x="Stomach Cancer", y="Count")
+
+# 나이에 따른 위암 발생 여부 분포
+ggplot(data_clean, aes(x=age, fill=stomach_cancer)) +
+  geom_histogram(binwidth=5, position="dodge") +
+  labs(title="Age Distribution by Stomach Cancer Status", x="Age", y="Count")
+
+# 상관 행렬 (숫자형 변수들 간의 관계)
+cor_data <- cor(data_clean %>% select_if(is.numeric))
+corrplot::corrplot(cor_data, method="circle")
+
+데이터 분할
+# 데이터 분할
+set.seed(123)  # 재현성을 위해 시드 고정
+trainIndex <- createDataPartition(data_clean$stomach_cancer, p=0.8, list=FALSE)
+train_data <- data_clean[trainIndex, ]
+test_data <- data_clean[-trainIndex, ]
+
+모델 재구축
+# 로지스틱 회귀 모델 생성
+logistic_model <- glm(stomach_cancer ~ ., data=train_data, family=binomial)
+
+# 모델 요약
+summary(logistic_model)
+
+# 예측 수행
+logistic_preds <- predict(logistic_model, newdata=test_data, type="response")
+logistic_class <- ifelse(logistic_preds > 0.5, 1, 0)
+
+# 성능 평가
+confusionMatrix(as.factor(logistic_class), as.factor(test_data$stomach_cancer))
+
+install.packages("randomForest")
+library(randomForest)
+
+# 랜덤 포레스트 모델 생성
+rf_model <- randomForest(stomach_cancer ~ ., data=train_data, ntree=500, mtry=3, importance=TRUE)
+
+# 변수 중요도 시각화
+varImpPlot(rf_model)
+
+# 예측 수행
+rf_preds <- predict(rf_model, newdata=test_data)
+
+# 성능 평가
+confusionMatrix(rf_preds, test_data$stomach_cancer)
+
+XGBoost 모델
+install.packages("xgboost")
+library(xgboost)
+
+# 데이터 준비 (XGBoost는 matrix 형식 필요)
+train_matrix <- xgb.DMatrix(data=as.matrix(train_data[,-1]), label=train_data$stomach_cancer)
+test_matrix <- xgb.DMatrix(data=as.matrix(test_data[,-1]), label=test_data$stomach_cancer)
+
+# 모델 학습
+xgb_model <- xgboost(data=train_matrix, max.depth=6, eta=0.1, nrounds=100, objective="binary:logistic")
+
+# 예측 수행
+xgb_preds <- predict(xgb_model, test_matrix)
+xgb_class <- ifelse(xgb_preds > 0.5, 1, 0)
+
+# 성능 평가
+confusionMatrix(as.factor(xgb_class), as.factor(test_data$stomach_cancer))
+# ROC-AUC 계산
+library(pROC)
+roc_obj <- roc(test_data$stomach_cancer, xgb_preds)
+auc(roc_obj)
+
+# ROC 커브 시각화
+plot(roc_obj, col="blue", main="ROC Curve for XGBoost")
+
+
+최적화
+# 랜덤 포레스트 하이퍼파라미터 튜닝
+tuneRF(train_data[, -1], train_data$stomach_cancer, stepFactor=1.5, improve=0.01, ntreeTry=100)
+# XGBoost 하이퍼파라미터 튜닝 (예: Grid Search)
+param_grid <- expand.grid(
+  eta = c(0.01, 0.1, 0.2),
+  max_depth = c(3, 6, 10),
+  nrounds = c(50, 100)
+)
+
+# 튜닝을 위한 반복문 작성
+for (params in 1:nrow(param_grid)) {
+  param_set <- param_grid[params, ]
+  model <- xgboost(
+    data=train_matrix, 
+    max.depth=param_set$max_depth, 
+    eta=param_set$eta, 
+    nrounds=param_set$nrounds, 
+    objective="binary:logistic"
+  )
+  pred <- predict(model, test_matrix)
+  print(auc(roc(test_data$stomach_cancer, pred)))
+}
+
